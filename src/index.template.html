@@ -72,11 +72,11 @@
       <textarea id="src" placeholder="e.g.&#10;Bitte überweisen Sie den Rechnungsbetrag von 49,90 EUR unter Angabe der Rechnungsnummer RE-2026-0001 …&#10;Zahlungsempfänger: …&#10;IBAN: DE.. …"></textarea>
       <div class="row">
         <button id="pasteBtn">Paste from clipboard</button>
-        <button id="imgBtn">Choose image…</button>
+        <button id="imgBtn">Choose image or PDF…</button>
         <button id="camBtn">Use camera</button>
         <button id="clearBtn">Clear all</button>
       </div>
-      <input type="file" id="file" accept="image/*" hidden>
+      <input type="file" id="file" accept="image/*,application/pdf,.pdf" hidden>
       <input type="file" id="cam" accept="image/*" capture="environment" hidden>
       <div class="hint" id="imgStatus">Text, screenshot or photo: paste with Ctrl+V or drop it on the box.</div>
       <img id="thumb" alt="" hidden>
@@ -544,11 +544,60 @@
     }
   }
 
-  const imageFrom = list => [...(list || [])].map(i => i.getAsFile ? (i.kind === 'file' && i.type.startsWith('image/') ? i.getAsFile() : null) : (i.type.startsWith('image/') ? i : null)).find(Boolean);
+  // ---------- PDF: embedded text first, else render the pages and OCR them ----------
+  const PDFJS = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/';
+  let pdfP;
+  const needPdfJs = () => pdfP || (pdfP = loadScript(PDFJS + 'pdf.min.js').then(() => { pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS + 'pdf.worker.min.js'; }).catch(e => { pdfP = null; throw e; }));
+  const isPdf = f => f.type === 'application/pdf' || /\.pdf$/i.test(f.name || '');
+
+  async function handlePdf(file) {
+    try {
+      status('Loading PDF reader…');
+      await needPdfJs();
+      status('Reading PDF…');
+      const pdf = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
+      const pages = Math.min(pdf.numPages, 5);
+      let text = '';
+      for (let n = 1; n <= pages; n++) {
+        const tc = await (await pdf.getPage(n)).getTextContent();
+        let lastY = null;
+        for (const it of tc.items) {
+          const y = it.transform[5];
+          if (lastY !== null && Math.abs(y - lastY) > 2) text += '\n'; else if (lastY !== null) text += ' ';
+          text += it.str; lastY = y;
+        }
+        text += '\n';
+      }
+      if (text.replace(/\s/g, '').length >= 40) {
+        $('thumb').hidden = true;
+        addText(text.trim());
+        fill();
+        status(current ? '✓ Text read from PDF. Check payee, amount and reference'
+                       : '⚠ PDF text read, but some fields are missing. Fill them in or add another page or image', current ? 'ok' : 'warn');
+        return;
+      }
+      // scanned PDF: no text layer, so render each page to an image and run it through the image path (QR, then OCR)
+      for (let n = 1; n <= pages; n++) {
+        status('Scanned PDF: rendering page ' + n + ' of ' + pages + '…');
+        const page = await pdf.getPage(n);
+        const v1 = page.getViewport({ scale: 1 });
+        const viewport = page.getViewport({ scale: 2400 / Math.max(v1.width, v1.height) });
+        const c = document.createElement('canvas');
+        c.width = Math.round(viewport.width); c.height = Math.round(viewport.height);
+        await page.render({ canvasContext: c.getContext('2d'), viewport }).promise;
+        await handleImage(await new Promise(r => c.toBlob(r, 'image/png')));
+      }
+    } catch (e) {
+      status('✗ Could not read the PDF: ' + e.message, 'err');
+    }
+  }
+  const handleFile = f => isPdf(f) ? handlePdf(f) : handleImage(f);
+
+  const imageFrom = list => [...(list || [])].map(i => i.getAsFile ? (i.kind === 'file' && (i.type.startsWith('image/') || i.type === 'application/pdf') ? i.getAsFile() : null) : (i.type.startsWith('image/') || isPdf(i) ? i : null)).find(Boolean);
 
   document.addEventListener('paste', e => {
     const img = imageFrom(e.clipboardData && e.clipboardData.items);
-    if (img) { e.preventDefault(); handleImage(img); }
+    if (img) { e.preventDefault(); handleFile(img); }
   });
   const ta = $('src');
   ta.addEventListener('dragover', e => { e.preventDefault(); ta.classList.add('drag'); });
@@ -556,7 +605,7 @@
   ta.addEventListener('drop', e => {
     ta.classList.remove('drag');
     const img = imageFrom(e.dataTransfer.files);
-    if (img) { e.preventDefault(); handleImage(img); }
+    if (img) { e.preventDefault(); handleFile(img); }
   });
   $('imgBtn').addEventListener('click', () => $('file').click());
 
@@ -608,7 +657,7 @@
     c.toBlob(b => handleImage(b), 'image/png');
   });
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && camStream) closeCam(); });
-  $('file').addEventListener('change', e => { if (e.target.files[0]) handleImage(e.target.files[0]); e.target.value = ''; });
+  $('file').addEventListener('change', e => { if (e.target.files[0]) handleFile(e.target.files[0]); e.target.value = ''; });
 
   $('pasteBtn').addEventListener('click', async () => {
     try {
@@ -618,7 +667,7 @@
           if (t) return handleImage(await item.getType(t));
         }
       }
-      $('src').value = await navigator.clipboard.readText(); fill();
+      addText(await navigator.clipboard.readText()); fill();
     }
     catch { $('src').focus(); status('Clipboard access blocked: click the box and press Ctrl+V instead.', 'warn'); }
   });
