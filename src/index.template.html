@@ -496,6 +496,43 @@
     render();
   }
 
+  // ---------- OCR clean-up: fix the mistakes Tesseract makes systematically, never touches pasted text or PDF text ----------
+  const KEEP_B = /^(?:eBay|iBeacon|Mc[A-Z]|Mac[A-Z])/;   // words where a lower-case letter + capital B is real
+  const TLD = 'de|com|net|org|eu|info|at|ch|biz|io|shop|online|app|dev|email|berlin|bayern|gmbh';
+  function cleanOcr(t) {
+    // ß read as B (JohannisstraBe, DieBen, WeiB) and ü read as ii (Schiirer, fiir)
+    t = t.replace(/[A-Za-zÄÖÜäöüß]+/g, w => KEEP_B.test(w) ? w : w.replace(/(?<=[a-zäöü])B(?=[a-zäöü]|$)/g, 'ß').replace(/(?<=[a-zäöü])ii(?=[a-zäöü])/g, 'ü'));
+    t = t.replace(/stra(?:tie|fie|Bie)\b/g, 'straße');
+    // legal form: GmbH read as Gmbh / GrnbH / GmbI-I / CmbH
+    t = t.replace(/\b[GC6](?:m|rn)b(?:[Hh]|[Il1]-?[Il1])(?![a-z])/g, 'GmbH');
+    // dashed rules and table borders come out as _ _ _ ~~ ===
+    t = t.replace(/(?<=[a-z])~{1,2}(?=[a-z])/g, m => 'm'.repeat(m.length)).replace(/(?<=\s|^)(?:[_~]+|[=-]{2,})(?=\s|$)/g, ' ').replace(/(?<=\w)_(?=[a-zA-Z])/g, ' ').replace(/[_~]{2,}/g, ' ');
+    // spaced-out capitals: C-U-S-T-O-M-E-R
+    t = t.replace(/\b(?:[A-Z0]-){3,}[A-Z0]\b/g, m => m.replace(/-/g, ''));
+    // web addresses and e-mail: OCR inserts spaces after dots, and misreads @ as é ê & © a
+    t = t.replace(/\b(www)\s*\.\s*/gi, '$1.');
+    t = t.replace(new RegExp('([A-Za-z0-9._-]{2,})\\s*[@éêè&©]\\s*([A-Za-z0-9-]+)\\s*\\.\\s*(' + TLD + ')\\b', 'gi'), (m, a, b, c) => a + '@' + b + '.' + c);
+    t = t.replace(new RegExp('([A-Za-z0-9-]{3,})\\.\\s+(' + TLD + ')\\b', 'gi'), '$1.$2');
+    t = t.replace(/\b([A-Za-z0-9-]{2,})\s*@\s*([A-Za-z0-9-]+)\s*\.\s*([A-Za-z]{2,})\b/g, '$1@$2.$3');
+    // amounts with a gap before the decimals
+    t = t.replace(/(\d)\s+,(\d{2})\b/g, '$1,$2');
+    return t;
+  }
+
+  // Greyscale + contrast stretch (1st..99th percentile to 0..255), in place.
+  function stretchGrey(c) {
+    const x = c.getContext('2d', { willReadFrequently: true }), im = x.getImageData(0, 0, c.width, c.height), d = im.data;
+    const hist = new Uint32Array(256);
+    for (let i = 0; i < d.length; i += 4) { const g = (d[i] * 299 + d[i + 1] * 587 + d[i + 2] * 114) / 1000 | 0; d[i] = d[i + 1] = d[i + 2] = g; hist[g]++; }
+    const total = d.length / 4; let lo = 0, hi = 255, acc = 0;
+    for (let v = 0; v < 256; v++) { acc += hist[v]; if (acc >= total * .01) { lo = v; break; } }
+    acc = 0;
+    for (let v = 255; v >= 0; v--) { acc += hist[v]; if (acc >= total * .01) { hi = v; break; } }
+    const k = hi > lo ? 255 / (hi - lo) : 1;
+    for (let i = 0; i < d.length; i += 4) d[i] = d[i + 1] = d[i + 2] = Math.max(0, Math.min(255, (d[i] - lo) * k));
+    x.putImageData(im, 0, 0);
+  }
+
   async function handleImage(blob) {
     try {
       $('thumb').src = URL.createObjectURL(blob); $('thumb').hidden = false;
@@ -529,13 +566,18 @@
       } catch (e) { /* no QR lib or no code: fall through to OCR */ }
 
       // 2. OCR. Tesseract is best at roughly 1600-2400 px on the long edge: upscale screenshots, shrink photos.
+      // Measured on an invoice and a till receipt: pages read best in auto-layout mode, in colour, at ~2400 px;
+      // narrow receipts read better as one block, in grey with stretched contrast, at ~3x (up to 2900 px).
       const longEdge = Math.max(bmp.width, bmp.height);
-      const src = scaled(longEdge < 1600 ? longEdge * 2 : 2400, true);
+      const receipt = longEdge / Math.min(bmp.width, bmp.height) > 1.7;
+      const src = scaled(receipt ? Math.min(2900, longEdge * 3) : (longEdge < 1600 ? longEdge * 2 : 2400), true);
+      if (receipt) stretchGrey(src);
       status('Loading text recognition (first time downloads ~10 MB)…');
       await paint();
       const worker = await getWorker();
+      await worker.setParameters({ tessedit_pageseg_mode: receipt ? '6' : '3' });
       const { data } = await worker.recognize(src);
-      addText(data.text.trim());
+      addText(cleanOcr(data.text.trim()));
       fill();
       status(current ? '✓ Text read from image. OCR can misread, so check payee, amount and reference'
                      : '⚠ Text read, but some fields are missing. Fill them in or try a sharper image', current ? 'ok' : 'warn');
