@@ -38,6 +38,7 @@
   button { font: inherit; font-size: 14px; padding: 8px 14px; border-radius: 6px; cursor: pointer;
     border: 1px solid var(--border); background: var(--card); color: var(--text); }
   button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  #ibanAlt button, #amountAlt button, #nameAlt button { margin: 4px 6px 0 0; padding: 4px 10px; font-size: 13px; }
   button:disabled { opacity: .45; cursor: default; }
   .qr-card { text-align: center; }
   #qr { width: 100%; max-width: 300px; aspect-ratio: 1; image-rendering: pixelated;
@@ -86,6 +87,7 @@
       <label for="name">Payee (Empfänger) <span class="count" id="nameCount"></span></label>
       <input id="name" maxlength="70" autocomplete="off">
       <div class="hint" id="nameHint"></div>
+      <div id="nameAlt"></div>
 
       <label for="iban">IBAN</label>
       <input id="iban" autocomplete="off" spellcheck="false">
@@ -99,6 +101,7 @@
       <label for="amount">Amount (EUR)</label>
       <input id="amount" inputmode="decimal" autocomplete="off">
       <div class="hint" id="amountHint"></div>
+      <div id="amountAlt"></div>
 
       <label for="ref">Reference (Verwendungszweck) <span class="count" id="refCount"></span></label>
       <input id="ref" maxlength="140" autocomplete="off">
@@ -270,7 +273,7 @@ var qrcode=function(){function i(t,r){function a(t,r){g=function(t){for(var r=ne
   const ID = '([A-Z0-9][A-Z0-9\\-\\/\\.]*[A-Z0-9]|[A-Z0-9])';
   const REF_LABELS = [
     ['Rechnungsnr.', '(?:Rechnungs[- ]?(?:nummer|nr\\.?)|Rechnung\\s*(?:Nr\\.?|Nummer)|Re\\.?[- ]?Nr\\.?|Invoice\\s*(?:no\\.?|number|#))'],
-    ['Kundennr.', '(?:Kunden[- ]?(?:nummer|nr\\.?)|Kd\\.?[- ]?Nr\\.?|Customer\\s*(?:no\\.?|number|ID))'],
+    ['Kundennr.', '(?:Kunden[- ]*(?:nummer|nr\\.?)|Kd\\.?[- ]?Nr\\.?|Customer\\s*(?:no\\.?|number|ID))'],
     ['Vertragsnr.', '(?:Vertrags[- ]?(?:nummer|nr\\.?)|Contract\\s*(?:no\\.?|number))'],
     ['Mitgliedsnr.', '(?:Mitglieds[- ]?(?:nummer|nr\\.?))'],
     ['Aktenzeichen', '(?:Aktenzeichen|Az\\.)'],
@@ -282,8 +285,9 @@ var qrcode=function(){function i(t,r){function a(t,r){g=function(t){for(var r=ne
     if (vz) return vz[1].trim().slice(0, 140);
     const parts = [];
     for (const [short, lbl] of REF_LABELS) {
-      const m = text.match(new RegExp(lbl + '\\s*[:#]?\\s*' + ID, 'i'));
-      if (m && /\d/.test(m[1])) parts.push(short + ' ' + m[1]);
+      // first match that carries a digit: "Kunden-Nr. angeben" must not hide "Kunden Nr.: 523014"
+      const m = [...text.matchAll(new RegExp(lbl + '\\s*[:#]?\\s*' + ID, 'gi'))].find(x => /\d/.test(x[1]));
+      if (m) parts.push(short + ' ' + m[1]);
     }
     return parts.join(' ').slice(0, 140);
   }
@@ -303,7 +307,7 @@ var qrcode=function(){function i(t,r){function a(t,r){g=function(t){for(var r=ne
     return '';
   }
 
-  function guessName(text, iban) {
+  function guessNames(text, iban) {
     const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
     const ibanLine = iban ? lines.findIndex(l => l.replace(/\s/g, '').toUpperCase().includes(iban)) : -1;
     // footer lines like "Firma GmbH · Hauptstr. 1 · 10115 Berlin": look at each segment
@@ -311,11 +315,12 @@ var qrcode=function(){function i(t,r){function a(t,r){g=function(t){for(var r=ne
       .flatMap((l, i) => l.split(/\s+[·|•–]\s+|\s{3,}|\t/).map(seg => ({ l: seg.trim(), i })))
       .map(({ l, i }) => ({ l: l.replace(/^(?:an|to|zugunsten(?: von)?|für)\s+/i, '').replace(/[,;:]$/, ''), i }))
       .filter(({ l }) => LEGAL_FORM.test(l) && !BANK_WORDS.test(l) && l.length <= 70 && !/\d{5,}/.test(l) && !/[:]/.test(l));
-    if (!cand.length) return '';
+    if (!cand.length) return [];
     // prefer the company line closest to (and preferably above) the IBAN
     if (ibanLine >= 0) cand.sort((a, b) => (Math.abs(a.i - ibanLine) + (a.i > ibanLine ? .5 : 0)) - (Math.abs(b.i - ibanLine) + (b.i > ibanLine ? .5 : 0)));
-    return cand[0].l;
+    return [...new Set(cand.map(c => c.l))];
   }
+  const guessName = (text, iban) => guessNames(text, iban)[0] || '';
 
   function guessRef(text, iban) {
     // Generic "Nr." / "Nummer" numbers, else a lone long number that isn't part of the IBAN
@@ -329,11 +334,16 @@ var qrcode=function(){function i(t,r){function a(t,r){g=function(t){for(var r=ne
     return nums.length ? nums[0] : '';
   }
 
-  function guessAmount(text, iban) {
-    // a lone money-looking number (has decimals), outside the IBAN
+  const AMOUNT_WARN = 999;   // above this the number is probably the wrong one (article no., sum of columns, …)
+  // Every money-looking number (has decimals) outside the IBANs, distinct, largest first.
+  function amountCandidates(text, iban) {
     const clean = iban ? text.replace(/[A-Z]{2}\d{2}(?:[ \t]?[A-Z0-9]){11,32}/gi, ' ') : text;
-    const all = [...clean.matchAll(/(?<![\d.,])(\d{1,3}(?:\.\d{3})*,\d{2}|\d+,\d{2})(?![\d.,])/g)].map(m => parseAmount(m[1])).filter(v => v > 0);
-    return all.length ? Math.max(...all) : null;   // invoices usually list items + total; total is the largest
+    const all = [...clean.matchAll(MONEY)].map(m => parseAmount(m[1])).filter(v => v > 0);
+    return [...new Set(all)].sort((a, b) => b - a);
+  }
+  function guessAmount(text, iban) {
+    const all = amountCandidates(text, iban);   // invoices list items + total; the total is usually the largest
+    return all.find(v => v <= AMOUNT_WARN) ?? all[0] ?? null;
   }
 
   function parse(text) {
@@ -358,6 +368,8 @@ var qrcode=function(){function i(t,r){function a(t,r){g=function(t){for(var r=ne
       amount: amount !== null && amount !== '' ? amount.toFixed(2).replace('.', ',') : '',
       guessed,
       alts: ibans.slice(1).map(o => ({ iban: o.iban, bic: findBic(text, o.pos) })),
+      amounts: amountCandidates(text, ibanRaw).filter(v => v !== amount).slice(0, 6),
+      names: guessNames(text, ibanRaw).filter(n => n !== name).slice(0, 4),
     };
   }
 
@@ -390,6 +402,7 @@ var qrcode=function(){function i(t,r){function a(t,r){g=function(t){for(var r=ne
 
     if (amt === null) { hint('amountHint', 'Required', 'warn'); ok = false; }
     else if (amt < 0.01 || amt > 999999999.99) { hint('amountHint', '✗ Must be 0,01 – 999.999.999,99', 'err'); ok = false; }
+    else if (amt > AMOUNT_WARN) hint('amountHint', '⚠ Over ' + AMOUNT_WARN + ' €: unusually high, please check the amount', 'warn');
     else hint('amountHint', '');
 
     if (!ref) hint('refHint', 'Empty: the payee may not be able to match your payment', 'warn');
@@ -453,21 +466,31 @@ var qrcode=function(){function i(t,r){function a(t,r){g=function(t){for(var r=ne
     const p = parse($('src').value);
     for (const k in F) F[k].value = p[k];
     guessed = p.guessed;
-    showAlts(p.alts);
+    showAllChoices(p);
     render();
   }
-  // Several bank accounts on one invoice: the first is used, the others are one tap away.
-  function showAlts(alts) {
-    const box = $('ibanAlt'); box.textContent = '';
-    if (!alts.length) return;
-    const lbl = document.createElement('div'); lbl.className = 'hint'; lbl.textContent = 'Other IBAN on this invoice:';
+  // When the text holds several values that could be right, the best guess is filled in and the others are one tap away.
+  function showChoices(id, label, items) {
+    const box = $(id); box.textContent = '';
+    if (!items.length) return;
+    const lbl = document.createElement('div'); lbl.className = 'hint'; lbl.textContent = label;
     box.append(lbl);
-    for (const a of alts) {
-      const b = document.createElement('button'); b.type = 'button';
-      b.textContent = 'Use ' + fmtIban(a.iban) + (a.bic ? ' · ' + a.bic : '');
-      b.addEventListener('click', () => { F.iban.value = fmtIban(a.iban); F.bic.value = a.bic; guessed.delete('iban'); guessed.delete('bic'); render(); });
+    for (const it of items) {
+      const b = document.createElement('button'); b.type = 'button'; b.textContent = it.text;
+      b.addEventListener('click', () => { it.apply(); render(); });
       box.append(b);
     }
+  }
+  function showAllChoices(p) {
+    const set = (k, v) => { F[k].value = v; guessed.delete(k); };
+    showChoices('ibanAlt', 'Other IBAN on this invoice:', p.alts.map(a => ({
+      text: fmtIban(a.iban) + (a.bic ? ' · ' + a.bic : ''),
+      apply: () => { set('iban', fmtIban(a.iban)); set('bic', a.bic); } })));
+    showChoices('amountAlt', 'Other amounts on this invoice:', p.amounts.map(v => {
+      const t = v.toFixed(2).replace('.', ',');
+      return { text: t + ' €', apply: () => set('amount', t) };
+    }));
+    showChoices('nameAlt', 'Other possible payees:', p.names.map(n => ({ text: n, apply: () => set('name', n) })));
   }
   $('src').addEventListener('input', fill);
   for (const k in F) F[k].addEventListener('input', () => { guessed.delete(k); render(); });
@@ -633,7 +656,7 @@ var qrcode=function(){function i(t,r){function a(t,r){g=function(t){for(var r=ne
     }
     catch { $('src').focus(); status('Clipboard access blocked: click the box and press Ctrl+V instead.', 'warn'); }
   });
-  $('clearBtn').addEventListener('click', () => { $('src').value = ''; for (const k in F) F[k].value = ''; guessed = new Set(); $('thumb').hidden = true; showAlts([]); status('Text, screenshot or photo: paste with Ctrl+V or drop it on the box.'); render(); $('src').focus(); });
+  $('clearBtn').addEventListener('click', () => { $('src').value = ''; for (const k in F) F[k].value = ''; guessed = new Set(); $('thumb').hidden = true; showAllChoices({ alts: [], amounts: [], names: [] }); status('Text, screenshot or photo: paste with Ctrl+V or drop it on the box.'); render(); $('src').focus(); });
   $('copyBtn').addEventListener('click', () => current && navigator.clipboard.writeText(current.iban));
   $('dlBtn').addEventListener('click', () => {
     if (!current) return;
