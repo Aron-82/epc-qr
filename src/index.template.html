@@ -474,33 +474,40 @@
       $('thumb').src = URL.createObjectURL(blob); $('thumb').hidden = false;
       status('Loading image…');
       const bmp = await createImageBitmap(blob);
-      const c = document.createElement('canvas');
-      c.width = bmp.width; c.height = bmp.height;
-      const ctx = c.getContext('2d', { willReadFrequently: true });
-      ctx.drawImage(bmp, 0, 0);
+      // Phone photos are 12 MP+: scanning or OCR-ing them at full size freezes the page. Cap the long edge.
+      const scaled = (max, up) => {
+        const k = max / Math.max(bmp.width, bmp.height);
+        if (!up && k > 1) return scaled(Math.max(bmp.width, bmp.height));
+        const c = document.createElement('canvas');
+        c.width = Math.round(bmp.width * k); c.height = Math.round(bmp.height * k);
+        const x = c.getContext('2d', { willReadFrequently: true });
+        x.imageSmoothingQuality = 'high';
+        x.drawImage(bmp, 0, 0, c.width, c.height);
+        return c;
+      };
+      const paint = () => new Promise(r => setTimeout(r, 30)); // let the status text render before heavy work
 
       // 1. The invoice may already carry a GiroCode/EPC QR: exact data, no OCR errors.
       try {
         status('Looking for a QR code…');
         await needJsQR();
+        await paint();
+        const c = scaled(1600), ctx = c.getContext('2d', { willReadFrequently: true });
         const q = jsQR(ctx.getImageData(0, 0, c.width, c.height).data, c.width, c.height);
-        if (q && /^BCD\r?\n/.test(q.data)) {
+        if (q && /^BCD
+?
+/.test(q.data)) {
           fillFromEpc(q.data);
           status('✓ Read the existing EPC QR code in the image (exact data)', 'ok');
           return;
         }
       } catch (e) { /* no QR lib or no code: fall through to OCR */ }
 
-      // 2. OCR. Upscale small screenshots; Tesseract is much better at ~2x.
-      let src = c;
-      if (bmp.width < 1600) {
-        src = document.createElement('canvas');
-        src.width = bmp.width * 2; src.height = bmp.height * 2;
-        const s2 = src.getContext('2d');
-        s2.imageSmoothingQuality = 'high';
-        s2.drawImage(bmp, 0, 0, src.width, src.height);
-      }
+      // 2. OCR. Tesseract is best at roughly 1600-2400 px on the long edge: upscale screenshots, shrink photos.
+      const longEdge = Math.max(bmp.width, bmp.height);
+      const src = scaled(longEdge < 1600 ? longEdge * 2 : 2400, true);
       status('Loading text recognition (first time downloads ~10 MB)…');
+      await paint();
       const worker = await getWorker();
       const { data } = await worker.recognize(src);
       $('src').value = data.text.trim();
