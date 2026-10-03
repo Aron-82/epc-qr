@@ -69,7 +69,7 @@
   <div class="grid">
     <section class="card">
       <h2>1 · Paste</h2>
-      <textarea id="src" placeholder="e.g.&#10;Bitte überweisen Sie den Rechnungsbetrag von 49,90 EUR unter Angabe der Rechnungsnummer RE-2026-0001 …&#10;Zahlungsempfänger: …&#10;IBAN: DE.. …&#10;BIC: …"></textarea>
+      <textarea id="src" placeholder="e.g.&#10;Bitte überweisen Sie den Rechnungsbetrag von 49,90 EUR unter Angabe der Rechnungsnummer RE-2026-0001 …&#10;Zahlungsempfänger: …&#10;IBAN: DE.. …"></textarea>
       <div class="row">
         <button id="pasteBtn">Paste from clipboard</button>
         <button id="imgBtn">Choose image…</button>
@@ -94,9 +94,6 @@
       <div class="hint" id="ibanHint"></div>
       <div id="ibanAlt"></div>
 
-      <label for="bic">BIC <span class="count">optional in SEPA</span></label>
-      <input id="bic" autocomplete="off" spellcheck="false">
-      <div class="hint" id="bicHint"></div>
 
       <label for="amount">Amount (EUR)</label>
       <input id="amount" inputmode="decimal" autocomplete="off">
@@ -141,7 +138,7 @@ var qrcode=function(){function i(t,r){function a(t,r){g=function(t){for(var r=ne
 <script>
 (() => {
   const $ = id => document.getElementById(id);
-  const F = { name: $('name'), iban: $('iban'), bic: $('bic'), amount: $('amount'), ref: $('ref') };
+  const F = { name: $('name'), iban: $('iban'), amount: $('amount'), ref: $('ref') };
 
   // ---------- IBAN ----------
   const IBAN_LEN = { AD:24, AT:20, BE:16, BG:22, CH:21, CY:28, CZ:24, DE:22, DK:18, EE:20, ES:24, FI:18,
@@ -186,17 +183,6 @@ var qrcode=function(){function i(t,r){function a(t,r){g=function(t){for(var r=ne
   }
 
   // ---------- other fields ----------
-  // With several banks on an invoice, take the labelled BIC closest to the chosen IBAN.
-  function findBic(text, pos) {
-    const re = /\b(?:BIC|SWIFT(?:[- ]?Code)?)\b[ \t]*[:.]?[ \t]*([A-Z]{4}[ \t]?[A-Z]{2}[ \t]?[A-Z0-9]{2}(?:[ \t]?[A-Z0-9]{3})?)\b/gi;
-    let m, best = null;
-    while ((m = re.exec(text))) {
-      const d = pos == null ? m.index : Math.abs(m.index - pos);
-      if (!best || d < best.d) best = { d, bic: m[1].replace(/\s/g, '').toUpperCase() };
-    }
-    return best ? best.bic : '';
-  }
-
   const NUM = '(\\d{1,3}(?:[.\\s\\u00a0]\\d{3})+(?:,\\d{1,2})?|\\d{1,3}(?:,\\d{3})+\\.\\d{1,2}|\\d+[.,]\\d{1,2}|\\d+)';
   function parseAmount(s) {
     s = s.replace(/[\s ]/g, '');
@@ -296,17 +282,6 @@ var qrcode=function(){function i(t,r){function a(t,r){g=function(t){for(var r=ne
   const BANK_WORDS = /\b(?:bank|sparkasse|volksbank|raiffeisen|kreditinstitut|bankinstitut|postbank|landesbank|girozentrale)\b|bank\b/i;
   const LEGAL_FORM = /(?:\bGmbH\b|\bmbH\b|\bAG\b|\bSE\b|\bKG\b|\bKGaA\b|\bOHG\b|\bUG\b|\bGbR\b|\be\.\s?V\.|\beG\b|\bLtd\b|\bLimited\b|\bInc\b|\bB\.V\.|\bS\.A\.|\bS\.à r\.l\.|\bAB\b|\bA\/S\b|\bStadtwerke\b|\bFinanzamt\b|\bStadtkasse\b|\bKasse\b|\bVersicherung\b|\bKrankenkasse\b)/;
 
-  function guessBic(text, iban) {
-    const cc = iban ? iban.slice(0, 2) : null;
-    const re = /\b([A-Z]{6}[A-Z0-9]{2}(?:[A-Z0-9]{3})?)\b/g;   // case-sensitive: BICs are uppercase
-    let m;
-    while ((m = re.exec(text))) {
-      const b = m[1];
-      if (!/\d/.test(b.slice(0, 6)) && (!cc || b.slice(4, 6) === cc) && !(iban && iban.includes(b))) return b;
-    }
-    return '';
-  }
-
   function guessNames(text, iban) {
     const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
     const ibanLine = iban ? lines.findIndex(l => l.replace(/\s/g, '').toUpperCase().includes(iban)) : -1;
@@ -359,15 +334,14 @@ var qrcode=function(){function i(t,r){function a(t,r){g=function(t){for(var r=ne
     };
     let name = pick('name', findName(text), () => guessName(text, ibanRaw));
     if (/&\s?Co\.?$/.test(name)) name += ' KG';   // the "KG" often lands on the next OCR line
-    const bic = pick('bic', findBic(text, ibans.length ? ibans[0].pos : null), () => guessBic(text, ibanRaw));
     const amount = pick('amount', findAmount(text), () => guessAmount(text, ibanRaw));
     const ref = pick('ref', findRef(text), () => guessRef(text, ibanRaw));
     return {
-      name, bic, ref,
+      name, ref,
       iban: ibanRaw ? fmtIban(ibanRaw) : '',
       amount: amount !== null && amount !== '' ? amount.toFixed(2).replace('.', ',') : '',
       guessed,
-      alts: ibans.slice(1).map(o => ({ iban: o.iban, bic: findBic(text, o.pos) })),
+      alts: ibans.slice(1).map(o => ({ iban: o.iban })),
       amounts: amountCandidates(text, ibanRaw).filter(v => v !== amount).slice(0, 6),
       names: guessNames(text, ibanRaw).filter(n => n !== name).slice(0, 4),
     };
@@ -380,7 +354,6 @@ var qrcode=function(){function i(t,r){function a(t,r){g=function(t){for(var r=ne
   function build() {
     const name = F.name.value.trim();
     const iban = F.iban.value.replace(/\s/g, '').toUpperCase();
-    const bic = F.bic.value.replace(/\s/g, '').toUpperCase();
     const amt = F.amount.value.trim() ? parseAmount(F.amount.value.trim().replace(/€|EUR/gi, '')) : null;
     const ref = F.ref.value.trim();
     let ok = true;
@@ -393,12 +366,6 @@ var qrcode=function(){function i(t,r){function a(t,r){g=function(t){for(var r=ne
     if (!iban) { hint('ibanHint', 'Required', 'warn'); ok = false; }
     else if (ibanValid(iban)) hint('ibanHint', '✓ Checksum valid', 'ok');
     else { hint('ibanHint', '✗ Invalid IBAN (checksum or length)', 'err'); ok = false; }
-
-    if (!bic) hint('bicHint', '');
-    else if (/^[A-Z]{6}[A-Z0-9]{2}([A-Z0-9]{3})?$/.test(bic)) {
-      const cc = bic.slice(4, 6), ic = iban.slice(0, 2);
-      hint('bicHint', ic && cc !== ic ? '⚠ BIC country (' + cc + ') ≠ IBAN country (' + ic + ')' : '✓ Format valid', ic && cc !== ic ? 'warn' : 'ok');
-    } else { hint('bicHint', '✗ Invalid BIC format', 'err'); ok = false; }
 
     if (amt === null) { hint('amountHint', 'Required', 'warn'); ok = false; }
     else if (amt < 0.01 || amt > 999999999.99) { hint('amountHint', '✗ Must be 0,01 – 999.999.999,99', 'err'); ok = false; }
@@ -417,10 +384,10 @@ var qrcode=function(){function i(t,r){function a(t,r){g=function(t){for(var r=ne
     }
 
     if (!ok) return null;
-    const lines = ['BCD', '002', '1', 'SCT', bic, name, iban, 'EUR' + amt.toFixed(2), '', '', ref];
+    const lines = ['BCD', '002', '1', 'SCT', '', name, iban, 'EUR' + amt.toFixed(2), '', '', ref];
     const payload = lines.join('\n').replace(/\n+$/, '');
     if (enc.encode(payload).length > 331) { hint('refHint', '✗ Payload too long (max 331 bytes)', 'err'); return null; }
-    return { payload, name, iban, bic, amt, ref };
+    return { payload, name, iban, amt, ref };
   }
 
   // ---------- rendering ----------
@@ -450,7 +417,6 @@ var qrcode=function(){function i(t,r){function a(t,r){g=function(t){for(var r=ne
 
     $('sumAmount').textContent = current.amt.toLocaleString('de-DE', { style: 'currency', currency: 'EUR' });
     const rows = [['Payee', current.name], ['IBAN', fmtIban(current.iban)]];
-    if (current.bic) rows.push(['BIC', current.bic]);
     if (current.ref) rows.push(['Reference', current.ref]);
     for (const [k, v] of rows) {
       const d = document.createElement('div');
@@ -484,8 +450,8 @@ var qrcode=function(){function i(t,r){function a(t,r){g=function(t){for(var r=ne
   function showAllChoices(p) {
     const set = (k, v) => { F[k].value = v; guessed.delete(k); };
     showChoices('ibanAlt', 'Other IBAN on this invoice:', p.alts.map(a => ({
-      text: fmtIban(a.iban) + (a.bic ? ' · ' + a.bic : ''),
-      apply: () => { set('iban', fmtIban(a.iban)); set('bic', a.bic); } })));
+      text: fmtIban(a.iban),
+      apply: () => set('iban', fmtIban(a.iban)) })));
     showChoices('amountAlt', 'Other amounts on this invoice:', p.amounts.map(v => {
       const t = v.toFixed(2).replace('.', ',');
       return { text: t + ' €', apply: () => set('amount', t) };
@@ -523,7 +489,7 @@ var qrcode=function(){function i(t,r){function a(t,r){g=function(t){for(var r=ne
     const l = payload.split(/\r?\n/);
     const amt = parseFloat((l[7] || '').replace(/^EUR/, ''));
     const set = (k, v) => { if (v) { F[k].value = v; guessed.delete(k); } };
-    set('bic', l[4]); set('name', l[5]); set('iban', l[6] ? fmtIban(l[6]) : '');
+    set('name', l[5]); set('iban', l[6] ? fmtIban(l[6]) : '');
     set('amount', isFinite(amt) ? amt.toFixed(2).replace('.', ',') : '');
     set('ref', l[9] || l[10] || l[11]);
     addText(payload);
