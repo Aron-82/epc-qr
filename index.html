@@ -494,9 +494,7 @@ var qrcode=function(){function i(t,r){function a(t,r){g=function(t){for(var r=ne
         await paint();
         const c = scaled(1600), ctx = c.getContext('2d', { willReadFrequently: true });
         const q = jsQR(ctx.getImageData(0, 0, c.width, c.height).data, c.width, c.height);
-        if (q && /^BCD
-?
-/.test(q.data)) {
+        if (q && /^BCD\r?\n/.test(q.data)) {
           fillFromEpc(q.data);
           status('✓ Read the existing EPC QR code in the image (exact data)', 'ok');
           return;
