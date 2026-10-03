@@ -456,16 +456,16 @@ var qrcode=function(){function i(t,r){function a(t,r){g=function(t){for(var r=ne
 
   const status = (msg, cls) => hint('imgStatus', msg, cls);
 
+  // Each image ADDS to what is already there: text is appended, and a QR only overwrites fields it actually carries.
+  const addText = t => { const cur = $('src').value.trim(); $('src').value = cur ? cur + '\n\n' + t : t; };
   function fillFromEpc(payload) {
     const l = payload.split(/\r?\n/);
     const amt = parseFloat((l[7] || '').replace(/^EUR/, ''));
-    F.bic.value = l[4] || '';
-    F.name.value = l[5] || '';
-    F.iban.value = l[6] ? fmtIban(l[6]) : '';
-    F.amount.value = isFinite(amt) ? amt.toFixed(2).replace('.', ',') : '';
-    F.ref.value = l[9] || l[10] || l[11] || '';
-    $('src').value = payload;
-    guessed = new Set();
+    const set = (k, v) => { if (v) { F[k].value = v; guessed.delete(k); } };
+    set('bic', l[4]); set('name', l[5]); set('iban', l[6] ? fmtIban(l[6]) : '');
+    set('amount', isFinite(amt) ? amt.toFixed(2).replace('.', ',') : '');
+    set('ref', l[9] || l[10] || l[11]);
+    addText(payload);
     render();
   }
 
@@ -508,7 +508,7 @@ var qrcode=function(){function i(t,r){function a(t,r){g=function(t){for(var r=ne
       await paint();
       const worker = await getWorker();
       const { data } = await worker.recognize(src);
-      $('src').value = data.text.trim();
+      addText(data.text.trim());
       fill();
       status(current ? '✓ Text read from image. OCR can misread, so check payee, amount and reference'
                      : '⚠ Text read, but some fields are missing. Fill them in or try a sharper image', current ? 'ok' : 'warn');
