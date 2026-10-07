@@ -220,7 +220,9 @@
 
   const NAME_LBL = 'Zahlungsempfänger|Zahlungsempfaenger|Empfänger|Empfaenger|Kontoinhaber(?:in)?|Begünstigte[rn]?|Inhaber|Payee|Beneficiary|Recipient|Account holder|Account name';
   function findName(text) {
-    const m = text.match(new RegExp('(?:' + NAME_LBL + ')[ \\t]*[:\\-][ \\t]*([^\\n]+)', 'i'));
+    const m = text.match(new RegExp('(?:' + NAME_LBL + ')[ \\t]*[:\\-][ \\t]*([^\\n]+)', 'i'))
+      // label at line start with no colon: "Empfänger Muster GmbH" (table copied as text)
+      || text.match(new RegExp('^[ \\t]*(?:' + NAME_LBL + ')[ \\t]+([^\\n]+)', 'im'));
     if (!m) return '';
     // stop at a following label on the same line ("… GmbH IBAN: DE…")
     const v = m[1].split(/\s+(?:IBAN|BIC|SWIFT|Bank(?:institut|verbindung)?|Kreditinstitut)\b/i)[0];
@@ -288,7 +290,7 @@
     // footer lines like "Firma GmbH · Hauptstr. 1 · 10115 Berlin": look at each segment
     const cand = lines
       .flatMap((l, i) => l.split(/\s+[·|•–]\s+|\s{3,}|\t/).map(seg => ({ l: seg.trim(), i })))
-      .map(({ l, i }) => ({ l: l.replace(/^(?:an|to|zugunsten(?: von)?|für)\s+/i, '').replace(/[,;:]$/, ''), i }))
+      .map(({ l, i }) => ({ l: l.replace(new RegExp('^(?:' + NAME_LBL + ')\\s+', 'i'), '').replace(/^(?:an|to|zugunsten(?: von)?|für)\s+/i, '').replace(/[,;:]$/, ''), i }))
       .filter(({ l }) => LEGAL_FORM.test(l) && !BANK_WORDS.test(l) && l.length <= 70 && !/\d{5,}/.test(l) && !/[:]/.test(l));
     if (!cand.length) return [];
     // prefer the company line closest to (and preferably above) the IBAN
